@@ -1,13 +1,26 @@
+# Core packages
 streamlit==1.30.0
 PyMuPDF==1.23.9
 PyPDF2==3.0.1
-sentence-transformers==2.2.2
-numpy==1.23.5
 requests==2.31.0
 python-dotenv==1.0.0
+
+# Machine learning and NLP
 spacy==3.5.3
 thinc==8.1.10
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.5.0/en_core_web_sm-3.5.0-py3-none-any.whl
+
+# Fix the specific version for sentence-transformers
+sentence-transformers==2.1.0
+
+# Vector database
 faiss-cpu==1.7.4
+
+# Build dependencies
 setuptools==68.0.0
 wheel==0.38.4
+
+# Torch with specific versions for compatibility
+torch==1.13.1
+torchvision==0.14.1
+transformers==4.26.0
