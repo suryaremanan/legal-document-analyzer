@@ -65,6 +65,7 @@ def text_to_bow_vector(text, dimension=EMBEDDING_DIMENSION):
 # Create a class that will load the model or use the fallback
 class EmbeddingModel:
     def __init__(self, model_name=DEFAULT_MODEL_NAME):
+        global SENTENCE_TRANSFORMER_AVAILABLE  # Add this line to declare it as global
         self.model_name = model_name
         self.model = None
         
