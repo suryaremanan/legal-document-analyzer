@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 SAMBANOVA_API_URL = "https://api.sambanova.ai/v1/completions"
 # If environment variable is not set, use the hardcoded key
 # SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
-SAMBANOVA_API_KEY = "e1248835-79ae-4576-b475-e3aff42951bd"  # Hardcoded for testing
+SAMBANOVA_API_KEY = "59e66a78-70e4-4846-9d76-a3f64513bd39"  # Hardcoded for testing
 
 # Print API key status (but not the actual key)
 if SAMBANOVA_API_KEY:
