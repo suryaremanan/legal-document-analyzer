@@ -1,13 +1,10 @@
 streamlit==1.30.0
 PyMuPDF==1.23.9
 PyPDF2==3.0.1
-sentence-transformers==2.2.2
-numpy==1.23.5
 requests==2.31.0
 python-dotenv==1.0.0
+numpy==1.23.5
 spacy==3.5.3
-thinc==8.1.10
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.5.0/en_core_web_sm-3.5.0-py3-none-any.whl
-faiss-cpu==1.7.4
-setuptools==68.0.0
-wheel==0.38.4
+sentence-transformers==2.2.2
+faiss-cpu==1.7.4 
