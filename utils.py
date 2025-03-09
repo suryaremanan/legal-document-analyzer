@@ -1,10 +1,18 @@
+"""
+Utility functions for the Legal Document Analyzer.
+"""
+
 import os
 import tempfile
-import streamlit as st
-from typing import Any, Optional
-import uuid
+import shutil
+import logging
+from typing import Tuple, Optional
 
-def save_uploaded_file(uploaded_file) -> str:
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def save_uploaded_file(uploaded_file) -> Tuple[str, str]:
     """
     Save an uploaded file to a temporary location.
     
@@ -12,51 +20,84 @@ def save_uploaded_file(uploaded_file) -> str:
         uploaded_file: Streamlit UploadedFile object
         
     Returns:
-        Path to the saved file
+        Tuple of (file path, file name)
     """
-    # Create a temporary directory if it doesn't exist
-    temp_dir = os.path.join(tempfile.gettempdir(), 'streamlit_uploads')
-    os.makedirs(temp_dir, exist_ok=True)
-    
-    # Generate a unique filename
-    file_extension = os.path.splitext(uploaded_file.name)[1]
-    temp_file_path = os.path.join(temp_dir, f"{uuid.uuid4()}{file_extension}")
-    
-    # Save the file
-    with open(temp_file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    
-    return temp_file_path
+    try:
+        # Create a temporary file path
+        temp_dir = tempfile.mkdtemp()
+        path = os.path.join(temp_dir, uploaded_file.name)
+        
+        # Save the file
+        with open(path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+            
+        logger.info(f"Saved uploaded file {uploaded_file.name} to {path}")
+        
+        return path, uploaded_file.name
+    except Exception as e:
+        logger.error(f"Error saving uploaded file: {str(e)}")
+        return "", ""
 
-def get_temp_file_path(base_name: str) -> str:
+def get_temp_file_path(file_name: str) -> str:
     """
-    Get a temporary file path with the given base name.
+    Get a temporary file path for a given file name.
     
     Args:
-        base_name: Base name for the file
+        file_name: Name of the file
         
     Returns:
-        Full path to the temporary file
+        Temporary file path
     """
-    temp_dir = os.path.join(tempfile.gettempdir(), 'streamlit_uploads')
-    os.makedirs(temp_dir, exist_ok=True)
-    return os.path.join(temp_dir, base_name)
+    temp_dir = tempfile.mkdtemp()
+    path = os.path.join(temp_dir, file_name)
+    return path
 
-def format_bytes(size_bytes: int) -> str:
+def format_bytes(size: int) -> str:
     """
-    Format bytes to human-readable format.
+    Format bytes to a human-readable format.
     
     Args:
-        size_bytes: Size in bytes
+        size: Size in bytes
         
     Returns:
-        Formatted string (e.g., "4.2 MB")
+        Formatted size string
     """
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB" 
+    power = 2**10  # 1024
+    n = 0
+    labels = {0: 'B', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
+    
+    while size > power:
+        size /= power
+        n += 1
+    
+    return f"{size:.2f} {labels[n]}"
+
+def generate_document_id() -> str:
+    """
+    Generate a unique document ID.
+    
+    Returns:
+        Unique document ID
+    """
+    import uuid
+    return str(uuid.uuid4())
+
+def clean_filename(filename: str) -> str:
+    """
+    Clean a filename to ensure it's valid.
+    
+    Args:
+        filename: Original filename
+        
+    Returns:
+        Cleaned filename
+    """
+    # Remove invalid characters
+    import re
+    cleaned = re.sub(r'[\\/*?:"<>|]', "", filename)
+    
+    # Truncate if too long
+    if len(cleaned) > 100:
+        cleaned = cleaned[:100]
+    
+    return cleaned 

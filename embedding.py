@@ -1,36 +1,31 @@
-# First attempt to import SentenceTransformer with error handling
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMER_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMER_AVAILABLE = False
-    import logging
-    logging.warning("SentenceTransformer could not be imported. Using fallback embedding method.")
+"""
+Embedding module for creating and searching text embeddings.
+"""
 
 import numpy as np
-from typing import List, Tuple, Dict, Any
 import logging
-from pdf_processor import split_into_chunks
-import os
-import traceback
 import streamlit as st
 import faiss
+from typing import List, Tuple, Dict, Any
+import traceback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Default model for embeddings
-DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# Try to import SentenceTransformer with fallback to simple embedding
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMER_AVAILABLE = True
+    logger.info("SentenceTransformer successfully imported")
+except ImportError:
+    SENTENCE_TRANSFORMER_AVAILABLE = False
+    logger.warning("SentenceTransformer could not be imported. Using fallback embedding method.")
 
-# Optional environment variable to disable embeddings for testing
-DISABLE_EMBEDDINGS = os.environ.get("DISABLE_EMBEDDINGS", "").lower() in ["true", "1", "yes"]
+# Set default embedding dimension
+EMBEDDING_DIMENSION = 384  # Common dimension for embedding models
 
-# Set default embedding model or cached path
-DEFAULT_MODEL_NAME = "all-MiniLM-L6-v2"
-EMBEDDING_DIMENSION = 384  # Dimension for the all-MiniLM-L6-v2 model
-
-# Alternative simple embedding method using bag of words or TF-IDF
+# Alternative simple embedding method using bag of words
 def text_to_bow_vector(text, dimension=EMBEDDING_DIMENSION):
     """Convert text to a bag of words vector (simplified embedding)"""
     import re
@@ -61,11 +56,10 @@ def text_to_bow_vector(text, dimension=EMBEDDING_DIMENSION):
     
     return vector
 
-
-# Create a class that will load the model or use the fallback
+# Embedding model class
 class EmbeddingModel:
-    def __init__(self, model_name=DEFAULT_MODEL_NAME):
-        global SENTENCE_TRANSFORMER_AVAILABLE  # Add this line to declare it as global
+    def __init__(self, model_name="all-MiniLM-L6-v2"):
+        global SENTENCE_TRANSFORMER_AVAILABLE
         self.model_name = model_name
         self.model = None
         
@@ -87,97 +81,95 @@ class EmbeddingModel:
             return self.model.encode(texts, show_progress_bar=show_progress_bar)
         else:
             # Use fallback method
+            logger.info("Using fallback bag-of-words embedding method")
             if isinstance(texts, str):
                 return text_to_bow_vector(texts)
             else:
                 return np.array([text_to_bow_vector(text) for text in texts])
 
-
 # Cache the model instance using Streamlit's caching
 @st.cache_resource
-def get_embedding_model(model_name=DEFAULT_MODEL_NAME):
+def get_embedding_model(model_name="all-MiniLM-L6-v2"):
     return EmbeddingModel(model_name)
 
-
-def create_embeddings(text: str, chunk_size: int = 1000, overlap: int = 200, 
-                     model_name: str = DEFAULT_EMBEDDING_MODEL) -> Tuple[List[str], np.ndarray]:
+def create_embeddings(text: str) -> Tuple[List[str], Any]:
     """
     Split text into chunks and create embeddings.
     
     Args:
         text: Text to process
-        chunk_size: Size of each chunk in characters
-        overlap: Overlap between chunks in characters
-        model_name: Name of the sentence-transformers model to use
         
     Returns:
-        Tuple of (list of text chunks, numpy array of embeddings)
+        Tuple of (list of text chunks, faiss index with embeddings)
     """
-    # Split text into chunks
-    logger.info(f"Splitting text into chunks (size={chunk_size}, overlap={overlap})")
-    chunks = split_into_chunks(text, chunk_size, overlap)
-    logger.info(f"Created {len(chunks)} chunks")
-    
-    if DISABLE_EMBEDDINGS:
-        logger.warning("Embeddings are disabled. Using random embeddings for testing.")
-        # Create random embeddings for testing
-        embeddings = np.random.random((len(chunks), 384))  # Common embedding size
-        return chunks, embeddings
+    from pdf_processor import split_into_chunks
     
     try:
-        # Load the model
-        logger.info(f"Loading embedding model: {model_name}")
+        # Split text into chunks
+        chunks = split_into_chunks(text)
+        logger.info(f"Created {len(chunks)} chunks")
+        
+        # Get the embedding model
         model = get_embedding_model()
         
         # Create embeddings
         logger.info("Generating embeddings")
         embeddings = model.encode(chunks, show_progress_bar=True)
         
+        # Create FAISS index
+        dimension = embeddings.shape[1]
+        index = faiss.IndexFlatL2(dimension)
+        index.add(np.array(embeddings).astype('float32'))
+        
         logger.info(f"Created embeddings with shape {embeddings.shape}")
         
-        return chunks, embeddings
+        return chunks, index
     except Exception as e:
         logger.error(f"Error in create_embeddings: {str(e)}")
         logger.error(traceback.format_exc())
-        raise
+        # Return empty results to avoid breaking the application
+        empty_index = faiss.IndexFlatL2(EMBEDDING_DIMENSION)
+        return [], empty_index
 
-def search_similar_chunks(query: str, chunks: List[str], index: Any, top_k: int = 5) -> List[str]:
+def search_similar_chunks(query: str, chunks: List[str], index: Any, k: int = 5) -> List[str]:
     """
     Search for chunks similar to the query.
     
     Args:
         query: Query text
-        chunks: Original text chunks
+        chunks: Text chunks
         index: FAISS index
-        top_k: Number of results to return
+        k: Number of chunks to return
         
     Returns:
-        List of similar text chunks
+        List of relevant text chunks
     """
     try:
-        logger.info(f"Searching for chunks similar to: {query}")
+        logger.info(f"Searching for chunks similar to query: {query[:50]}...")
         
+        # Get the embedding model
         model = get_embedding_model()
         
-        # Generate query embedding
+        # Create query embedding
         query_embedding = model.encode(query)
         
         # Reshape for FAISS
         query_embedding = np.array([query_embedding]).astype('float32')
         
         # Search the index
-        distances, indices = index.search(query_embedding, min(top_k, len(chunks)))
+        k = min(k, len(chunks))  # Don't try to retrieve more chunks than exist
+        distances, indices = index.search(query_embedding, k)
         
-        # Get the text of the most similar chunks
-        similar_chunks = [chunks[idx] for idx in indices[0]]
+        # Get the relevant chunks
+        relevant_chunks = [chunks[idx] for idx in indices[0]]
         
-        logger.info(f"Found {len(similar_chunks)} similar chunks")
-        return similar_chunks
-    
+        logger.info(f"Found {len(relevant_chunks)} relevant chunks")
+        
+        return relevant_chunks
     except Exception as e:
-        logger.error(f"Error searching similar chunks: {str(e)}")
-        # Return a subset of random chunks if search fails
-        # This prevents the app from crashing
+        logger.error(f"Error in search_similar_chunks: {str(e)}")
+        logger.error(traceback.format_exc())
+        # Return a subset of chunks to avoid breaking the application
         import random
-        sample_size = min(top_k, len(chunks))
-        return random.sample(chunks, sample_size) if sample_size > 0 else [] 
+        k = min(k, len(chunks))
+        return random.sample(chunks, k) if chunks and k > 0 else chunks[:1] if chunks else ["No relevant information found."] 

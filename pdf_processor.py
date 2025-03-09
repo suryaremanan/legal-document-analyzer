@@ -1,61 +1,46 @@
+"""
+PDF processor module for extracting and cleaning text from PDF documents.
+"""
+
 import logging
 import re
+import os
 import fitz  # PyMuPDF
-import PyPDF2
-from typing import Optional, List, Tuple
+from typing import List, Optional, Tuple
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def extract_text_from_pdf(pdf_path: str) -> str:
+def extract_text_from_pdf(file_path: str) -> str:
     """
-    Extract text from a PDF file using multiple libraries for reliability.
+    Extract text from a PDF file.
     
     Args:
-        pdf_path: Path to the PDF file
+        file_path: Path to the PDF file
         
     Returns:
-        Extracted text from the PDF
+        Extracted text as a string
     """
-    extracted_text = ""
-    
-    # Try PyMuPDF first (usually better quality)
     try:
-        logger.info(f"Extracting text from {pdf_path} using PyMuPDF")
-        doc = fitz.open(pdf_path)
+        logger.info(f"Extracting text from PDF: {file_path}")
+        
+        # Open the PDF file
+        doc = fitz.open(file_path)
+        
+        # Extract text from each page
+        full_text = ""
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
-            extracted_text += page.get_text()
-        doc.close()
+            page_text = page.get_text()
+            full_text += page_text + "\n\n"  # Add extra newlines between pages
         
-        if extracted_text.strip():
-            logger.info(f"Successfully extracted {len(extracted_text)} characters with PyMuPDF")
-            return extracted_text
-    except Exception as e:
-        logger.warning(f"PyMuPDF extraction failed: {str(e)}")
-    
-    # Fallback to PyPDF2
-    try:
-        logger.info(f"Extracting text from {pdf_path} using PyPDF2")
-        extracted_text = ""
-        with open(pdf_path, 'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            for page_num in range(len(reader.pages)):
-                page = reader.pages[page_num]
-                extracted_text += page.extract_text()
+        logger.info(f"Successfully extracted {len(full_text)} characters from {len(doc)} pages")
         
-        if extracted_text.strip():
-            logger.info(f"Successfully extracted {len(extracted_text)} characters with PyPDF2")
-            return extracted_text
+        return full_text
     except Exception as e:
-        logger.warning(f"PyPDF2 extraction failed: {str(e)}")
-    
-    if not extracted_text.strip():
-        logger.error(f"Failed to extract text from {pdf_path}")
-        return "Text extraction failed. The PDF might be scanned or have security restrictions."
-    
-    return extracted_text
+        logger.error(f"Error extracting text from PDF: {str(e)}")
+        return f"Error extracting text: {str(e)}"
 
 def clean_text(text: str) -> str:
     """
@@ -67,66 +52,69 @@ def clean_text(text: str) -> str:
     Returns:
         Cleaned text
     """
-    # Replace multiple newlines with a single one
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    
-    # Remove excessive whitespace
-    text = re.sub(r' {2,}', ' ', text)
-    
-    # Remove form feed characters
-    text = re.sub(r'\f', '', text)
-    
-    # Strip lines
-    lines = [line.strip() for line in text.split('\n')]
-    text = '\n'.join(lines)
-    
-    # Remove document artifacts often found in PDFs
-    text = re.sub(r'Formatted: .*?$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'Commented \[.*?\].*?$', '', text, flags=re.MULTILINE)
-    
-    return text
+    try:
+        logger.info("Cleaning extracted text")
+        
+        # Remove excessive whitespace
+        cleaned = re.sub(r'\s+', ' ', text).strip()
+        
+        # Fix common OCR/extraction issues
+        cleaned = cleaned.replace('•', '* ')  # Replace bullets with asterisks
+        cleaned = re.sub(r'([a-z])(\.)([A-Z])', r'\1\2 \3', cleaned)  # Add space after periods
+        
+        # Remove page numbers and headers/footers (simplified approach)
+        cleaned = re.sub(r'\n\s*\d+\s*\n', '\n', cleaned)  # Remove standalone page numbers
+        
+        logger.info(f"Text cleaning complete, final length: {len(cleaned)} characters")
+        
+        return cleaned
+    except Exception as e:
+        logger.error(f"Error cleaning text: {str(e)}")
+        return text  # Return original text on error
 
 def split_into_chunks(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
     """
-    Split text into overlapping chunks for processing.
+    Split text into overlapping chunks.
     
     Args:
         text: Text to split
-        chunk_size: Size of each chunk in characters
-        overlap: Overlap between chunks in characters
+        chunk_size: Maximum size of each chunk
+        overlap: Overlap between chunks
         
     Returns:
         List of text chunks
     """
-    chunks = []
-    
-    if len(text) <= chunk_size:
-        chunks.append(text)
-    else:
-        start = 0
-        while start < len(text):
-            # Find the end of the chunk
-            end = start + chunk_size
-            
-            # If this is not the last chunk, try to find a natural breakpoint
-            if end < len(text):
-                # Look for a paragraph break or a period within the last 100 chars of the chunk
-                search_zone = text[end-100:end+100]
-                
-                # Try to find paragraph break
-                paragraph_break = search_zone.find('\n\n')
-                if paragraph_break != -1:
-                    end = end - 100 + paragraph_break + 2  # +2 for the newline chars
+    try:
+        logger.info(f"Splitting text into chunks (size={chunk_size}, overlap={overlap})")
+        
+        # Split text by paragraphs first
+        paragraphs = re.split(r'\n\s*\n', text)
+        
+        chunks = []
+        current_chunk = ""
+        
+        for paragraph in paragraphs:
+            # If adding this paragraph would exceed chunk size, store the current chunk
+            if len(current_chunk) + len(paragraph) > chunk_size and current_chunk:
+                chunks.append(current_chunk.strip())
+                # Keep the overlap from the end of the previous chunk
+                overlap_text = current_chunk[-overlap:] if len(current_chunk) > overlap else current_chunk
+                current_chunk = overlap_text + " " + paragraph
+            else:
+                # Add paragraph to current chunk
+                if current_chunk:
+                    current_chunk += "\n\n" + paragraph
                 else:
-                    # Try to find sentence break (period followed by space)
-                    sentence_break = search_zone.find('. ')
-                    if sentence_break != -1:
-                        end = end - 100 + sentence_break + 2  # +2 for period and space
-            
-            # Add the chunk
-            chunks.append(text[start:end])
-            
-            # Move the start position, considering overlap
-            start = end - overlap
-    
-    return chunks 
+                    current_chunk = paragraph
+        
+        # Add the last chunk if it exists
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        
+        logger.info(f"Split text into {len(chunks)} chunks")
+        
+        return chunks
+    except Exception as e:
+        logger.error(f"Error splitting text into chunks: {str(e)}")
+        # Return a single chunk with the whole text on error
+        return [text] 
