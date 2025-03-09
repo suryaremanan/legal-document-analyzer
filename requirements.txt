@@ -24,3 +24,6 @@ wheel==0.38.4
 torch==1.13.1
 torchvision==0.14.1
 transformers==4.26.0
+
+# Add compatible huggingface_hub version
+huggingface_hub==0.12.1
