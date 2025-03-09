@@ -47,7 +47,7 @@ class MetadataExtractor:
         """
         try:
             # Try LLM-based approach first
-            metadata = self.extract_metadata_with_llm(text, filename)
+            metadata = self.extract_metadata_with_llm(text)
             
             # Add estimated page count if not present
             if "estimated_page_count" not in metadata:
@@ -68,132 +68,112 @@ class MetadataExtractor:
             
             return metadata
     
-    def extract_metadata_with_llm(self, text: str, filename: str = None) -> Dict[str, Any]:
+    def extract_metadata_with_llm(self, text: str) -> Dict[str, Any]:
         """
-        Extract metadata from document text using LLM-based approach.
+        Extract metadata from text using LLM.
         
         Args:
-            text: The text content of the document
-            filename: Optional filename for additional context
+            text: Text to extract metadata from
             
         Returns:
-            Dictionary containing extracted metadata in JSON format
+            Dictionary of metadata fields
         """
-        # Add filename to context if available
-        filename_context = f"Filename: {filename}\n\n" if filename else ""
-        
-        # Create the extraction prompt
-        prompt = (
-            "Extract metadata from the following legal document text as a JSON object. Use the field guidelines below. "
-            "Include each field only if it is found in the text.\n\n"
-            f"{filename_context}"
-            "==== METADATA EXTRACTION GUIDELINES ====\n"
-            "Include the following fields **only if they appear** in the text:\n"
-            "- contract_type: The type of legal document (e.g., NDA, Service Agreement, Distribution Agreement, Employment Contract, License Agreement).\n"
-            "- parties: The organizations or individuals involved.\n"
-            "- effective_date: The date when the agreement takes effect (YYYY-MM-DD).\n"
-            "- execution_date: The date when the document was signed.\n"
-            "- termination_date: The date when the agreement ends or 'Indefinite'.\n"
-            "- jurisdiction: The governing jurisdiction (e.g., France, EU, USA, Romanian Law).\n"
-            "- governing_law: The legal framework (e.g., French Law, EU Regulations, Romanian Civil Code, GDPR Compliance).\n"
-            "- version: The contract version or amendment indicator (e.g., V1, V2, Final, Draft).\n\n"
-            "Additional Metadata (if present):\n"
-            "- contract_status: Current status (Active, Expired, Terminated, Under Negotiation).\n"
-            "- previous_version_reference: Reference to prior version(s) or version history.\n"
-            "- key_obligations: Main responsibilities of the parties.\n"
-            "- payment_obligations: Payment terms or financial obligations.\n"
-            "- confidentiality_clause: Details of confidentiality or data protection obligations.\n"
-            "- dispute_resolution: Mechanisms for resolving disputes (arbitration, litigation, etc.).\n"
-            "- force_majeure: Conditions excusing performance (e.g., war, pandemic, government intervention).\n"
-            "- exclusivity: Whether one party has exclusive rights.\n"
-            "- non_compete: Restrictions on engaging with competitors.\n"
-            "- ip_assignment: Ownership rights or licensing.\n\n"
-            "==== ADDITIONAL FIELDS FROM SPECIFIC LABELS ====\n"
-            "Also include these fields if they appear in the text:\n"
-            "- brand_licensor: Entity granting rights over brand use.\n"
-            "- licensee: Entity receiving brand/IP rights.\n"
-            "- producers: Companies authorized to manufacture products.\n"
-            "- partner_restaurants: Entities authorized to sell branded products.\n"
-            "- sub_licensee: Third parties allowed to use IP under a sublicense.\n"
-            "- competitor_restriction: Details on non-compete clauses or market exclusivity.\n"
-            "- trademark_ownership: Ownership of trademarks and licensing terms.\n"
-            "- trademark_registration_status: Registration status of trademarks (e.g., Pending, Approved).\n"
-            "- trademark_usage_license: Details on trademark licensing (Exclusive/Non-exclusive, Geographic Scope).\n"
-            "- know_how_transfer: Clauses related to transferring know-how.\n"
-            "- trade_secrets_protection: Confidentiality terms around proprietary knowledge.\n"
-            "- branding_rights: Rights regarding logos, slogans, and product names.\n"
-            "- advertising_restrictions: Approval requirements for marketing materials.\n"
-            "- royalty_fee_percentage: Percentage payable as a royalty fee.\n"
-            "- revenue_share_model: Details on revenue sharing between parties.\n"
-            "- late_payment_penalty: Penalties or interest for late payments.\n"
-            "- revenue_collection_agent: Entity authorized to collect payments.\n"
-            "- obligation_to_perform: Specific performance obligations defined in the contract.\n"
-            "- service_standards: Quality control and performance measures.\n"
-            "- product_quality_standards: Health and safety compliance details.\n"
-            "- compliance_requirements: Legal compliance obligations (e.g., GDPR, Consumer Protection Laws).\n"
-            "- audit_rights: Rights to inspect compliance with contract terms.\n"
-            "- penalties_for_breach: Consequences for non-performance.\n"
-            "- termination_notice_period: Notice period required for termination.\n"
-            "- automatic_renewal: Whether the contract renews automatically.\n"
-            "- grounds_for_termination: Conditions that allow contract termination.\n"
-            "- post_termination_restrictions: Obligations after termination (e.g., non-compete clauses).\n"
-            "- survival_clauses: Clauses that remain in effect post-termination.\n"
-            "- exit_compensation: Penalties or fees for early termination.\n"
-            "- exclusivity_agreement: Details on any exclusivity agreements.\n"
-            "- market_restrictions: Geographic or sector-specific limitations.\n"
-            "- competitor_collaboration_ban: Restrictions on partnering with competitors.\n"
-            "- post_contract_restriction_period: Duration of non-compete obligations after contract ends.\n"
-            "- data_processing_agreement: GDPR compliance details related to data processing.\n"
-            "- third_party_disclosure_restrictions: Limits on sharing confidential information with third parties.\n"
-            "- confidentiality_duration: Duration for which confidentiality obligations persist.\n"
-            "- sensitive_data_definition: Definitions regarding sensitive or proprietary data.\n"
-            "- security_measures: Measures such as encryption or access control details.\n"
-            "- marketing_approval_requirement: Whether marketing materials require prior approval.\n"
-            "- co_branding_agreements: Permissions for joint branding initiatives.\n"
-            "- use_of_trademark_in_ads: Allowed usage of trademarks in advertising.\n"
-            "- sales_channel_limitations: Restrictions on sales channels (online vs. offline).\n"
-            "- influencer_advertising_restrictions: Terms protecting brand image in influencer campaigns.\n"
-            "- reporting_requirements: Requirements for sales or performance reporting.\n"
-            "- kpi_tracking: Key performance indicators mentioned in the contract.\n"
-            "- performance_bonuses: Bonus structures tied to performance metrics.\n"
-            "- inspection_rights: Rights to conduct inspections or audits.\n"
-            "==== FILENAME & DATE DETECTION ====\n"
-            "- If the text references any filename(s) containing a date (e.g., 'Contract_2023-01-05_v2.pdf'), parse that date.\n"
-            "- Compare multiple filenames to determine which is earliest or latest.\n"
-            "- Store any detected filename(s) under 'source_document' with the parsed date and a flag indicating whether it is the latest version.\n\n"
-            "==== DOCUMENT TEXT ====\n"
-            f"Document Text (first section):\n{text[:3000]}...\n\n"
-            "Return ONLY a valid JSON object with the fields that are found. Omit any field that is not present. "
-            "Do not add extra commentary or disclaimers."
-        )
-        
-        logger.info("Extracting metadata using LLM")
-        response = get_llama_response(prompt, temperature=0.0, max_tokens=1500)
-        
         try:
-            # Try to parse the JSON response
-            # Strip any possible markdown formatting if present
-            if "```json" in response:
-                json_str = response.split("```json")[1].split("```")[0].strip()
-            elif "```" in response:
-                json_str = response.split("```")[1].strip()
-            else:
-                json_str = response.strip()
+            logger.info("Extracting metadata with LLM")
             
-            metadata = json.loads(json_str)
+            # Only use first N characters to avoid token limits
+            text_sample = text[:10000]
             
-            # If the response has a nested metadata object, use that
-            if isinstance(metadata, dict) and "metadata" in metadata:
-                return metadata["metadata"]
+            prompt = f"""You are a specialized legal document analyzer. Extract the following metadata from the provided document text:
+
+1. Title of the document
+2. Document type (contract, letter, memo, filing, etc.)
+3. Estimated page count (make an educated guess based on the text volume)
+4. Organizations mentioned (return as a list of entity objects with name and type)
+5. People mentioned (return as a list of entity objects with name and role) 
+6. Dates mentioned (return as a list)
+7. Monetary values mentioned (return as a list)
+8. Contract type (if applicable)
+
+Your response should be in valid JSON format only, structured like this:
+{{
+  "title": "string",
+  "document_type": "string",
+  "estimated_page_count": number,
+  "organizations": [
+    {{"name": "string", "type": "string"}}
+  ],
+  "people": [
+    {{"name": "string", "role": "string"}}
+  ],
+  "dates": ["string"],
+  "monetary_values": ["string"],
+  "contract_type": "string"
+}}
+
+If you're unsure about any field, provide your best guess rather than leaving it empty. For the 'organizations' and 'people' fields, identify at least 2-3 entities if present.
+
+Document Text:
+{text_sample}
+
+JSON Metadata:
+"""
             
-            return metadata
+            # Get response from SambaNova API
+            response = get_llama_response(prompt)
+            
+            logger.info("Received metadata extraction response from LLM")
+            
+            # Parse JSON response
+            try:
+                # Extract JSON part if there's text around it
+                import re
+                json_match = re.search(r'```json(.*?)```', response, re.DOTALL)
+                if json_match:
+                    response = json_match.group(1).strip()
+                else:
+                    # Try to find JSON with braces
+                    json_match = re.search(r'({.*})', response, re.DOTALL)
+                    if json_match:
+                        response = json_match.group(1).strip()
+                
+                import json
+                metadata = json.loads(response)
+                
+                # Ensure required fields exist
+                required_fields = ['title', 'document_type', 'organizations', 'people', 'dates']
+                for field in required_fields:
+                    if field not in metadata:
+                        metadata[field] = [] if field in ['organizations', 'people', 'dates'] else "Unknown"
+                
+                return metadata
+            except Exception as e:
+                logger.error(f"Error parsing metadata JSON: {str(e)}")
+                logger.error(f"Raw response: {response}")
+                # Return default metadata if parsing fails
+                return {
+                    "title": "Unknown Document",
+                    "document_type": "Unknown",
+                    "estimated_page_count": 1,
+                    "organizations": [],
+                    "people": [],
+                    "dates": [],
+                    "monetary_values": [],
+                    "contract_type": ""
+                }
+                
         except Exception as e:
-            logger.error(f"Error parsing LLM metadata response: {str(e)}")
-            logger.info(f"Raw response: {response}")
-            
-            # Fall back to rule-based extraction
-            logger.info("Falling back to rule-based extraction")
-            return self._extract_metadata_rule_based(text, filename)
+            logger.error(f"Error in metadata extraction: {str(e)}")
+            return {
+                "title": "Error in Processing",
+                "document_type": "Unknown",
+                "estimated_page_count": 1,
+                "organizations": [],
+                "people": [],
+                "dates": [],
+                "monetary_values": [],
+                "contract_type": ""
+            }
     
     def _extract_metadata_rule_based(self, text: str, filename: str = None) -> Dict[str, Any]:
         """Rule-based metadata extraction (fallback method)"""

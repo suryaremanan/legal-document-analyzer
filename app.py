@@ -501,74 +501,95 @@ with tab2:
         if st.session_state.selected_document_id and st.session_state.selected_document_id != "all":
             # Show metadata for selected document
             doc = st.session_state.documents[st.session_state.selected_document_id]
-            metadata = doc["metadata"]
             
-            col1, col2 = st.columns([1, 1])
+            st.subheader(f"Metadata for {doc['filename']}")
             
-            with col1:
-                st.markdown("#### Document Information")
-                st.markdown(f"**Title:** {metadata.get('title', '')}")
-                st.markdown(f"**Type:** {metadata.get('contract_type', metadata.get('document_type', 'Unknown'))}")
-                st.markdown(f"**Estimated Pages:** {metadata.get('estimated_page_count', 'Unknown')}")
+            if doc.get("metadata"):
+                metadata = doc["metadata"]
                 
-                st.markdown("#### Important Dates")
-                if metadata.get('dates'):
-                    for date in metadata.get('dates'):
-                        st.markdown(f"- {date}")
-                else:
-                    st.markdown("No dates found")
-            
-            with col2:
-                st.markdown("#### Organizations")
-                if metadata.get('organizations'):
-                    for org in metadata.get('organizations'):
-                        st.markdown(f"- {org}")
-                else:
-                    st.markdown("No organizations identified")
+                col1, col2 = st.columns([1, 1])
                 
-                st.markdown("#### People")
-                if metadata.get('people'):
-                    for person in metadata.get('people'):
-                        st.markdown(f"- {person}")
-                else:
-                    st.markdown("No individuals identified")
+                with col1:
+                    st.markdown(f"**Title:** {metadata.get('title', 'Untitled')}")
+                    st.markdown(f"**Type:** {metadata.get('contract_type', metadata.get('document_type', 'Unknown'))}")
+                    st.markdown(f"**Estimated Pages:** {metadata.get('estimated_page_count', 'Unknown')}")
+                    
+                    st.markdown("**Important Dates:**")
+                    if metadata.get('dates'):
+                        for date in metadata.get('dates')[:3]:
+                            st.markdown(f"- {date}")
                 
-                st.markdown("#### Monetary Values")
-                if metadata.get('monetary_values'):
-                    for value in metadata.get('monetary_values'):
-                        st.markdown(f"- {value}")
-                else:
-                    st.markdown("No monetary values found")
+                with col2:
+                    st.markdown("**Organizations:**")
+                    if metadata.get('organizations'):
+                        for org in metadata.get('organizations')[:3]:
+                            if isinstance(org, dict):
+                                org_name = org.get("name", str(org))
+                                org_type = org.get("type", "")
+                                st.markdown(f"- {org_name} ({org_type})" if org_type else f"- {org_name}")
+                            else:
+                                st.markdown(f"- {org}")
+                    
+                    st.markdown("**People:**")
+                    if metadata.get('people'):
+                        for person in metadata.get('people')[:3]:
+                            if isinstance(person, dict):
+                                person_name = person.get("name", str(person))
+                                person_role = person.get("role", "")
+                                st.markdown(f"- {person_name} ({person_role})" if person_role else f"- {person_name}")
+                            else:
+                                st.markdown(f"- {person}")
+                    
+                    st.markdown("**Monetary Values:**")
+                    if metadata.get('monetary_values'):
+                        for value in metadata.get('monetary_values')[:3]:
+                            st.markdown(f"- {value}")
+            else:
+                st.info("No metadata available for this document.")
         else:
             # Show metadata for all documents
-            st.markdown("### All Documents Metadata")
-            
             for doc_id, doc in st.session_state.documents.items():
                 with st.expander(f"{doc['filename']}"):
-                    metadata = doc["metadata"]
-                    
-                    col1, col2 = st.columns([1, 1])
-                    
-                    with col1:
-                        st.markdown(f"**Title:** {metadata.get('title', 'Untitled')}")
-                        st.markdown(f"**Type:** {metadata.get('contract_type', metadata.get('document_type', 'Unknown'))}")
-                        st.markdown(f"**Estimated Pages:** {metadata.get('estimated_page_count', 'Unknown')}")
+                    if doc.get("metadata"):
+                        metadata = doc["metadata"]
                         
-                        st.markdown("**Important Dates:**")
-                        if metadata.get('dates'):
-                            for date in metadata.get('dates')[:3]:
-                                st.markdown(f"- {date}")
-                    
-                    with col2:
-                        st.markdown("**Organizations:**")
-                        if metadata.get('organizations'):
-                            for org in metadata.get('organizations')[:3]:
-                                st.markdown(f"- {org}")
+                        col1, col2 = st.columns([1, 1])
                         
-                        st.markdown("**Monetary Values:**")
-                        if metadata.get('monetary_values'):
-                            for value in metadata.get('monetary_values')[:3]:
-                                st.markdown(f"- {value}")
+                        with col1:
+                            st.markdown(f"**Title:** {metadata.get('title', 'Untitled')}")
+                            st.markdown(f"**Type:** {metadata.get('contract_type', metadata.get('document_type', 'Unknown'))}")
+                            st.markdown(f"**Estimated Pages:** {metadata.get('estimated_page_count', 'Unknown')}")
+                            
+                            st.markdown("**Important Dates:**")
+                            if metadata.get('dates'):
+                                for date in metadata.get('dates')[:3]:
+                                    st.markdown(f"- {date}")
+                        
+                        with col2:
+                            st.markdown("**Organizations:**")
+                            if metadata.get('organizations'):
+                                for org in metadata.get('organizations')[:3]:
+                                    if isinstance(org, dict):
+                                        org_name = org.get("name", str(org))
+                                        org_type = org.get("type", "")
+                                        st.markdown(f"- {org_name} ({org_type})" if org_type else f"- {org_name}")
+                                    else:
+                                        st.markdown(f"- {org}")
+                            
+                            st.markdown("**People:**")
+                            if metadata.get('people'):
+                                for person in metadata.get('people')[:3]:
+                                    if isinstance(person, dict):
+                                        person_name = person.get("name", str(person))
+                                        person_role = person.get("role", "")
+                                        st.markdown(f"- {person_name} ({person_role})" if person_role else f"- {person_name}")
+                                    else:
+                                        st.markdown(f"- {person}")
+                            
+                            st.markdown("**Monetary Values:**")
+                            if metadata.get('monetary_values'):
+                                for value in metadata.get('monetary_values')[:3]:
+                                    st.markdown(f"- {value}")
     else:
         st.info("No documents processed yet. Please upload PDFs and click 'Process All Documents'.")
 
