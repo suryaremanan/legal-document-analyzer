@@ -1,0 +1,205 @@
+Below is a complete markdown document outlining an interactive Streamlit UI design for your project. It includes both a detailed explanation of the UI components (for PDF extraction, chatbot interactions via SambaNova/Meta Llama 3.1, and RAG) and a section on “cursor rules” for the interface. You can copy this markdown into your project documentation or use it as a guideline when building your Streamlit app.
+
+---
+
+# Interactive Streamlit UI for PDF Extraction & Chatbot with RAG
+
+This document outlines the design of a Streamlit-based interface to extract text from PDFs, perform text cleaning and embedding, conduct retrieval-augmented generation, and interact with a chatbot powered by the SambaNova API and Meta Llama 3.1. In addition, it provides detailed "cursor rules" for enhancing the user experience.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [UI Components & Workflow](#ui-components--workflow)
+  - [Document Upload & Pre-processing](#document-upload--pre-processing)
+  - [Text Cleaning & Tokenization](#text-cleaning--tokenization)
+  - [Embedding & Vector Database](#embedding--vector-database)
+  - [Retrieval-Augmented Generation (RAG)](#retrieval-augmented-generation-rag)
+  - [Chatbot Interface](#chatbot-interface)
+- [Cursor Rules & UI Interaction Guidelines](#cursor-rules--ui-interaction-guidelines)
+- [Example Streamlit Code](#example-streamlit-code)
+- [Conclusion](#conclusion)
+
+---
+
+## Overview
+
+This interactive UI is designed to handle the following tasks:
+1. **PDF Processing**: Upload PDF files with selectable text. Extract text using libraries like PyMuPDF or PyPDF2.
+2. **Data Cleaning & Processing**: Normalize text, tokenize, and prepare for embedding.
+3. **Embedding & Retrieval**: Generate text and query embeddings, store them in a vector database (e.g., faiss), and perform semantic searches.
+4. **Chatbot Interaction**: Use the SambaNova API with Meta Llama 3.1 to generate responses based on retrieved context.
+5. **User-Friendly Interface**: The UI will be built with Streamlit, ensuring an engaging and responsive experience.
+
+---
+
+## UI Components & Workflow
+
+### Document Upload & Pre-processing
+
+- **File Uploader Widget**: Allow users to upload PDFs.
+- **Text Extraction**: Utilize PyMuPDF (fitz) or PyPDF2 to extract text page by page.
+- **Display Preview**: Show a preview of the extracted text for verification.
+
+### Text Cleaning & Tokenization
+
+- **Normalization**: Convert text to lowercase, remove punctuation, and strip extra whitespace.
+- **Tokenization**: Split text into tokens (words/sentences) for further processing.
+
+### Embedding & Vector Database
+
+- **Embedding Generation**: Use an appropriate model to generate embeddings for the cleaned text.
+- **Vector Storage**: Store the embeddings in a vector database such as faiss for efficient retrieval.
+
+### Retrieval-Augmented Generation (RAG)
+
+- **Query Processing**: Create embeddings for user queries.
+- **Similarity Search**: Retrieve relevant document chunks from the vector database using semantic search.
+- **Context Combination**: Merge retrieved chunks with the user query to form a detailed context.
+- **Response Generation**: Invoke the SambaNova API with Meta Llama 3.1 to produce a response based on the context.
+
+### Chatbot Interface
+
+- **Input Field**: Provide a text input widget for users to ask questions.
+- **Display Chat History**: Render a chat history area to show the conversation.
+- **Response Display**: Present the API-generated responses clearly in the interface.
+
+---
+
+## Cursor Rules & UI Interaction Guidelines
+
+To enhance the user experience, the following cursor rules are recommended for the interactive UI:
+
+1. **General Rules**:
+   - **Interactive Elements**: The cursor should change to a pointer (hand icon) when hovering over clickable elements (buttons, links, etc.).
+   - **Text Input Areas**: When hovering over any text input (file uploader, chat input, search fields), the cursor should change to the text input cursor (I-beam).
+
+2. **Specific Cursor Behaviors**:
+   - **Buttons**:  
+     - **Default State**: Regular arrow cursor.
+     - **Hover State**: Change to pointer to indicate clickability.
+   - **File Uploader**:  
+     - **Default State**: Arrow cursor over non-interactive parts.
+     - **Hover State**: Over the upload area, use a pointer cursor.
+   - **Text Fields & Chat Input**:  
+     - **Default State**: I-beam cursor.
+     - **Focused State**: Maintain the I-beam; disable any pointer changes.
+   - **Disabled or Loading States**:
+     - **Disabled Elements**: Use a “not-allowed” cursor to indicate inactivity.
+     - **Loading Indicators**: Optionally, show a spinner along with a “progress” cursor if an operation is in progress.
+
+3. **Custom CSS for Streamlit**:
+   - You can inject custom CSS in Streamlit to enforce these cursor rules. For example:
+  
+     ```python
+     import streamlit as st
+
+     custom_css = """
+     <style>
+     /* Cursor rule for buttons */
+     button:hover {
+         cursor: pointer;
+     }
+
+     /* Cursor rule for text input fields */
+     .stTextInput > div > input {
+         cursor: text;
+     }
+
+     /* Cursor rule for file uploader */
+     .stFileUploader {
+         cursor: pointer;
+     }
+
+     /* Cursor rule for disabled elements */
+     .disabled {
+         cursor: not-allowed;
+     }
+     </style>
+     """
+
+     st.markdown(custom_css, unsafe_allow_html=True)
+     ```
+
+4. **Responsiveness**:
+   - Ensure that the cursor rules work across different devices and screen sizes.
+   - Test interactive elements in various states (hover, active, disabled) to maintain a consistent user experience.
+
+---
+
+## Example Streamlit Code
+
+Below is a sample code snippet demonstrating how to implement the interactive UI and inject the custom CSS for cursor rules:
+
+```python
+import streamlit as st
+import fitz  # PyMuPDF
+# import PyPDF2  # Alternatively, for text extraction
+
+# Inject custom CSS for cursor rules
+custom_css = """
+<style>
+/* Cursor rule for buttons */
+button:hover {
+    cursor: pointer;
+}
+
+/* Cursor rule for text input fields */
+.stTextInput > div > input {
+    cursor: text;
+}
+
+/* Cursor rule for file uploader */
+.stFileUploader {
+    cursor: pointer;
+}
+
+/* Cursor rule for disabled elements */
+.disabled {
+    cursor: not-allowed;
+}
+</style>
+"""
+st.markdown(custom_css, unsafe_allow_html=True)
+
+# Title
+st.title("Interactive PDF Chatbot with RAG")
+
+# File uploader
+pdf_file = st.file_uploader("Upload a PDF file", type=["pdf"])
+
+if pdf_file is not None:
+    # Display file name
+    st.write("Uploaded file:", pdf_file.name)
+
+    # Extract text using PyMuPDF
+    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+    extracted_text = ""
+    for page in doc:
+        extracted_text += page.get_text()
+    st.text_area("Extracted Text", extracted_text, height=300)
+
+    # Additional steps (text cleaning, embedding, retrieval) would follow here
+    # For example: text_normalized = extracted_text.lower().strip()
+    # Then, generate embeddings, store them in faiss, etc.
+
+# Chatbot interface
+st.subheader("Chat with the Bot")
+user_query = st.text_input("Enter your question:")
+if st.button("Submit"):
+    if user_query:
+        # Here you would integrate your retrieval and SambaNova API call
+        # For demonstration, we simply echo the query.
+        st.write("You asked:", user_query)
+        # Simulate response
+        st.write("Bot says: [Simulated response based on RAG and Meta Llama 3.1]")
+    else:
+        st.error("Please enter a query.")
+```
+
+---
+
+## Conclusion
+
+This document provides a detailed guideline for building an interactive Streamlit UI that incorporates PDF text extraction, retrieval-augmented generation, and a chatbot interface. The included "cursor rules" ensure that the application is intuitive and responsive, with clear visual feedback for user interactions. Customize and expand upon this template based on your project's specific needs.
+
+--- 
