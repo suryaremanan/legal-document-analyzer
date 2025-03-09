@@ -1,9 +1,20 @@
+# First attempt to import SentenceTransformer with error handling
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMER_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMER_AVAILABLE = False
+    import logging
+    logging.warning("SentenceTransformer could not be imported. Using fallback embedding method.")
+
 import numpy as np
 from typing import List, Tuple, Dict, Any
 import logging
 from pdf_processor import split_into_chunks
 import os
 import traceback
+import streamlit as st
+import faiss
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -14,6 +25,78 @@ DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Optional environment variable to disable embeddings for testing
 DISABLE_EMBEDDINGS = os.environ.get("DISABLE_EMBEDDINGS", "").lower() in ["true", "1", "yes"]
+
+# Set default embedding model or cached path
+DEFAULT_MODEL_NAME = "all-MiniLM-L6-v2"
+EMBEDDING_DIMENSION = 384  # Dimension for the all-MiniLM-L6-v2 model
+
+# Alternative simple embedding method using bag of words or TF-IDF
+def text_to_bow_vector(text, dimension=EMBEDDING_DIMENSION):
+    """Convert text to a bag of words vector (simplified embedding)"""
+    import re
+    from collections import Counter
+    import hashlib
+    
+    # Clean and tokenize text
+    text = text.lower()
+    tokens = re.findall(r'\b\w+\b', text)
+    
+    # Count tokens
+    token_counts = Counter(tokens)
+    
+    # Create a simple embedding using hash functions to map to dimensions
+    vector = np.zeros(dimension, dtype=np.float32)
+    
+    for token, count in token_counts.items():
+        # Hash the token to determine which dimension to increment
+        hash_value = int(hashlib.md5(token.encode()).hexdigest(), 16)
+        dim = hash_value % dimension
+        # Use the count as the value
+        vector[dim] += count
+    
+    # Normalize vector
+    norm = np.linalg.norm(vector)
+    if norm > 0:
+        vector = vector / norm
+    
+    return vector
+
+
+# Create a class that will load the model or use the fallback
+class EmbeddingModel:
+    def __init__(self, model_name=DEFAULT_MODEL_NAME):
+        self.model_name = model_name
+        self.model = None
+        
+        if SENTENCE_TRANSFORMER_AVAILABLE:
+            try:
+                logger.info(f"Loading SentenceTransformer model: {model_name}")
+                self.model = SentenceTransformer(model_name)
+                logger.info("SentenceTransformer model loaded successfully")
+            except Exception as e:
+                logger.error(f"Error loading SentenceTransformer model: {str(e)}")
+                SENTENCE_TRANSFORMER_AVAILABLE = False
+        
+        if not SENTENCE_TRANSFORMER_AVAILABLE:
+            logger.warning("Using fallback embedding method")
+    
+    def encode(self, texts, show_progress_bar=True):
+        """Encode text into embeddings"""
+        if SENTENCE_TRANSFORMER_AVAILABLE and self.model:
+            return self.model.encode(texts, show_progress_bar=show_progress_bar)
+        else:
+            # Use fallback method
+            if isinstance(texts, str):
+                return text_to_bow_vector(texts)
+            else:
+                return np.array([text_to_bow_vector(text) for text in texts])
+
+
+# Cache the model instance using Streamlit's caching
+@st.cache_resource
+def get_embedding_model(model_name=DEFAULT_MODEL_NAME):
+    return EmbeddingModel(model_name)
+
 
 def create_embeddings(text: str, chunk_size: int = 1000, overlap: int = 200, 
                      model_name: str = DEFAULT_EMBEDDING_MODEL) -> Tuple[List[str], np.ndarray]:
@@ -43,12 +126,7 @@ def create_embeddings(text: str, chunk_size: int = 1000, overlap: int = 200,
     try:
         # Load the model
         logger.info(f"Loading embedding model: {model_name}")
-        try:
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer(model_name)
-        except ImportError as e:
-            logger.error(f"Error importing SentenceTransformer: {str(e)}")
-            raise ImportError(f"Failed to import SentenceTransformer. Please install with: pip install sentence-transformers==2.1.0")
+        model = get_embedding_model()
         
         # Create embeddings
         logger.info("Generating embeddings")
@@ -62,45 +140,43 @@ def create_embeddings(text: str, chunk_size: int = 1000, overlap: int = 200,
         logger.error(traceback.format_exc())
         raise
 
-def search_similar_chunks(query: str, chunks: List[str], embeddings: np.ndarray, 
-                         k: int = 3, model_name: str = DEFAULT_EMBEDDING_MODEL) -> List[str]:
+def search_similar_chunks(query: str, chunks: List[str], index: Any, top_k: int = 5) -> List[str]:
     """
-    Search for chunks similar to the query using cosine similarity.
+    Search for chunks similar to the query.
     
     Args:
         query: Query text
-        chunks: List of text chunks
-        embeddings: Numpy array of embeddings for chunks
-        k: Number of similar chunks to return
-        model_name: Name of the sentence-transformers model to use
+        chunks: Original text chunks
+        index: FAISS index
+        top_k: Number of results to return
         
     Returns:
-        List of similar chunks
+        List of similar text chunks
     """
-    if DISABLE_EMBEDDINGS:
-        logger.warning("Embeddings are disabled. Returning first chunks for testing.")
-        return chunks[:min(k, len(chunks))]
-    
     try:
-        # Load the model
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(model_name)
+        logger.info(f"Searching for chunks similar to: {query}")
         
-        # Encode the query
-        query_embedding = model.encode([query])[0]
+        model = get_embedding_model()
         
-        # Calculate cosine similarity
-        similarities = np.dot(embeddings, query_embedding) / (
-            np.linalg.norm(embeddings, axis=1) * np.linalg.norm(query_embedding)
-        )
+        # Generate query embedding
+        query_embedding = model.encode(query)
         
-        # Get top k similar chunks
-        top_k_indices = np.argsort(similarities)[-k:][::-1]
+        # Reshape for FAISS
+        query_embedding = np.array([query_embedding]).astype('float32')
         
-        # Return the similar chunks
-        return [chunks[i] for i in top_k_indices]
+        # Search the index
+        distances, indices = index.search(query_embedding, min(top_k, len(chunks)))
+        
+        # Get the text of the most similar chunks
+        similar_chunks = [chunks[idx] for idx in indices[0]]
+        
+        logger.info(f"Found {len(similar_chunks)} similar chunks")
+        return similar_chunks
+    
     except Exception as e:
-        logger.error(f"Error in search_similar_chunks: {str(e)}")
-        logger.error(traceback.format_exc())
-        # Fallback to returning first k chunks
-        return chunks[:min(k, len(chunks))] 
+        logger.error(f"Error searching similar chunks: {str(e)}")
+        # Return a subset of random chunks if search fails
+        # This prevents the app from crashing
+        import random
+        sample_size = min(top_k, len(chunks))
+        return random.sample(chunks, sample_size) if sample_size > 0 else [] 
