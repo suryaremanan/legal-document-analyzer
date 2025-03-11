@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Tuple, Optional
 import datetime
 from sambanova_api import get_llama_response
 import json
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -47,7 +48,7 @@ class MetadataExtractor:
         """
         try:
             # Try LLM-based approach first
-            metadata = self.extract_metadata_with_llm(text)
+            metadata = self.extract_metadata_with_llm(text, filename)
             
             # Add estimated page count if not present
             if "estimated_page_count" not in metadata:
@@ -68,12 +69,13 @@ class MetadataExtractor:
             
             return metadata
     
-    def extract_metadata_with_llm(self, text: str) -> Dict[str, Any]:
+    def extract_metadata_with_llm(self, text: str, filename: str = None) -> Dict[str, Any]:
         """
-        Extract metadata from text using LLM.
+        Extract metadata from text using LLM with robust error handling.
         
         Args:
             text: Text to extract metadata from
+            filename: Optional filename to provide context
             
         Returns:
             Dictionary of metadata fields
@@ -81,187 +83,359 @@ class MetadataExtractor:
         try:
             logger.info("Extracting metadata with LLM")
             
-            # Only use first N characters to avoid token limits
-            text_sample = text[:10000]
+            # Create comprehensive metadata extraction prompt
+            prompt = (
+                "Extract metadata from the following legal document text as a JSON object. Use the field guidelines below. "
+                "Include each field only if it is found in the text.\n\n"
+                "==== METADATA EXTRACTION GUIDELINES ====\n"
+                "Include the following fields **only if they appear** in the text:\n"
+                "- contract_type: The type of legal document (e.g., NDA, Service Agreement, Distribution Agreement, Employment Contract, License Agreement).\n"
+                "- parties: The organizations or individuals involved.\n"
+                "- effective_date: The date when the agreement takes effect (YYYY-MM-DD).\n"
+                "- execution_date: The date when the document was signed.\n"
+                "- termination_date: The date when the agreement ends or 'Indefinite'.\n"
+                "- jurisdiction: The governing jurisdiction (e.g., France, EU, USA, Romanian Law).\n"
+                "- governing_law: The legal framework (e.g., French Law, EU Regulations, Romanian Civil Code, GDPR Compliance).\n"
+                "- version: The contract version or amendment indicator (e.g., V1, V2, Final, Draft).\n\n"
+                
+                "Additional Metadata (if present):\n"
+                "- contract_status: Current status (Active, Expired, Terminated, Under Negotiation).\n"
+                "- previous_version_reference: Reference to prior version(s) or version history.\n"
+                "- key_obligations: Main responsibilities of the parties.\n"
+                "- payment_obligations: Payment terms or financial obligations.\n"
+                "- confidentiality_clause: Details of confidentiality or data protection obligations.\n"
+                "- dispute_resolution: Mechanisms for resolving disputes (arbitration, litigation, etc.).\n"
+                "- force_majeure: Conditions excusing performance (e.g., war, pandemic, government intervention).\n"
+                "- exclusivity: Whether one party has exclusive rights.\n"
+                "- non_compete: Restrictions on engaging with competitors.\n"
+                "- ip_assignment: Ownership rights or licensing.\n\n"
+                
+                "==== FILENAME & DATE DETECTION ====\n"
+                f"- The document filename is: {filename if filename else 'Unknown'}\n"
+                "- If the text references any filename(s) containing a date (e.g., 'Contract_2023-01-05_v2.pdf'), parse that date.\n"
+                "- Store any detected filename(s) under 'source_document' with the parsed date and a flag indicating whether it is the latest version.\n\n"
+                
+                "==== DOCUMENT TEXT ====\n"
+                f"{text[:min(len(text), 8000)]}...\n\n"
+                
+                "Return ONLY a valid JSON object with the fields that are found. Omit any field that is not present. "
+                "Do not add extra commentary or disclaimers."
+            )
             
-            prompt = f"""You are a specialized legal document analyzer. Extract the following metadata from the provided document text:
-
-1. Title of the document
-2. Document type (contract, letter, memo, filing, etc.)
-3. Estimated page count (make an educated guess based on the text volume)
-4. Organizations mentioned (return as a list of entity objects with name and type)
-5. People mentioned (return as a list of entity objects with name and role) 
-6. Dates mentioned (return as a list)
-7. Monetary values mentioned (return as a list)
-8. Contract type (if applicable)
-
-Your response should be in valid JSON format only, structured like this:
-{{
-  "title": "string",
-  "document_type": "string",
-  "estimated_page_count": number,
-  "organizations": [
-    {{"name": "string", "type": "string"}}
-  ],
-  "people": [
-    {{"name": "string", "role": "string"}}
-  ],
-  "dates": ["string"],
-  "monetary_values": ["string"],
-  "contract_type": "string"
-}}
-
-If you're unsure about any field, provide your best guess rather than leaving it empty. For the 'organizations' and 'people' fields, identify at least 2-3 entities if present.
-
-Document Text:
-{text_sample}
-
-JSON Metadata:
-"""
+            # Get metadata from LLM
+            llm_response = get_llama_response(prompt, temperature=0.1, max_tokens=1000)
             
-            # Get response from SambaNova API
-            response = get_llama_response(prompt)
-            
+            # Log the response
             logger.info("Received metadata extraction response from LLM")
             
-            # Parse JSON response
+            # Process the response
+            if not llm_response:
+                logger.error("LLM returned None response")
+                return self._extract_metadata_rule_based(text, filename)
+            
+            # Try to parse JSON
             try:
-                # Extract JSON part if there's text around it
-                import re
-                json_match = re.search(r'```json(.*?)```', response, re.DOTALL)
+                # Extract JSON part (in case there's additional text)
+                json_match = re.search(r'({[\s\S]*})', llm_response)
                 if json_match:
-                    response = json_match.group(1).strip()
+                    json_str = json_match.group(1)
+                    metadata = json.loads(json_str)
+                    return metadata
                 else:
-                    # Try to find JSON with braces
-                    json_match = re.search(r'({.*})', response, re.DOTALL)
-                    if json_match:
-                        response = json_match.group(1).strip()
+                    # No JSON found
+                    logger.error("No JSON found in LLM response")
+                    return self._extract_metadata_rule_based(text, filename)
                 
-                import json
-                metadata = json.loads(response)
-                
-                # Ensure required fields exist
-                required_fields = ['title', 'document_type', 'organizations', 'people', 'dates']
-                for field in required_fields:
-                    if field not in metadata:
-                        metadata[field] = [] if field in ['organizations', 'people', 'dates'] else "Unknown"
-                
-                return metadata
-            except Exception as e:
-                logger.error(f"Error parsing metadata JSON: {str(e)}")
-                logger.error(f"Raw response: {response}")
-                # Return default metadata if parsing fails
-                return {
-                    "title": "Unknown Document",
-                    "document_type": "Unknown",
-                    "estimated_page_count": 1,
-                    "organizations": [],
-                    "people": [],
-                    "dates": [],
-                    "monetary_values": [],
-                    "contract_type": ""
-                }
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing JSON from LLM response: {e}")
+                return self._extract_metadata_rule_based(text, filename)
                 
         except Exception as e:
             logger.error(f"Error in metadata extraction: {str(e)}")
-            return {
-                "title": "Error in Processing",
-                "document_type": "Unknown",
-                "estimated_page_count": 1,
-                "organizations": [],
-                "people": [],
-                "dates": [],
-                "monetary_values": [],
-                "contract_type": ""
-            }
+            return self._extract_metadata_rule_based(text, filename)
     
     def _extract_metadata_rule_based(self, text: str, filename: str = None) -> Dict[str, Any]:
-        """Rule-based metadata extraction (fallback method)"""
-        metadata = {}
+        """
+        Extract metadata using rule-based methods as a fallback.
         
-        # Extract document type and title
-        metadata.update(self._extract_document_type(text))
+        Args:
+            text: Text to extract metadata from
+            filename: Optional filename
+            
+        Returns:
+            Dictionary of metadata fields
+        """
+        logger.info("Using rule-based metadata extraction")
+        
+        # Initialize metadata dict with basic structure
+        result = {
+            "title": "",
+            "document_type": "",
+            "estimated_page_count": self._estimate_page_count(text),
+            "organizations": [],
+            "people": [],
+            "dates": [],
+            "monetary_values": [],
+            "contract_type": "",
+            "source_document": {},
+            "parties": [],
+            "effective_date": "",
+            "execution_date": "",
+            "termination_date": "",
+            "jurisdiction": "",
+            "governing_law": "",
+            "version": "",
+            "contract_status": "",
+            "exclusivity": "",
+            "non_compete": "",
+            "dispute_resolution": ""
+        }
+        
+        # Add source document info if filename is provided
+        if filename:
+            result["source_document"] = self._extract_source_document_info(filename, text)
+        
+        # Extract title - check first 1000 characters
+        title_text = text[:1000]
+        title_match = re.search(r'^(.+?)(?:\n\n|\r\n\r\n)', title_text, re.DOTALL)
+        if title_match:
+            result["title"] = title_match.group(1).strip()
+        else:
+            # Try alternative patterns for title
+            alt_title_match = re.search(r'(?:AGREEMENT|CONTRACT|MEMORANDUM|AMENDMENT)(?:\s+OF|\s+FOR|\s+TO)?\s+(.+?)(?:\n|\r\n)', title_text, re.IGNORECASE)
+            if alt_title_match:
+                result["title"] = alt_title_match.group(0).strip()
+        
+        # Extract document type
+        for doc_type in self.document_types:
+            if re.search(fr'\b{re.escape(doc_type)}\b', text[:3000], re.IGNORECASE):
+                result["document_type"] = doc_type.title()
+                result["contract_type"] = doc_type.title()
+                break
+        
+        # Extract parties/organizations using pattern matching
+        party_patterns = [
+            r'(?:between|by and between)\s+(.+?)\s+and\s+(.+?)(?:\s+and\s+(.+?))?(?:\,|\.|;|\n)',
+            r'(?:THIS\s+[A-Z]+\s+is made by|entered into by)\s+(.+?)\s+and\s+(.+?)(?:\s+and\s+(.+?))?(?:\,|\.|;|\n)',
+            r'([A-Z][A-Za-z\s,]+(?:Inc\.|LLC|Ltd\.|Corporation|Corp\.|Co\.))\s+and\s+([A-Z][A-Za-z\s,]+(?:Inc\.|LLC|Ltd\.|Corporation|Corp\.|Co\.))'
+        ]
+        
+        for pattern in party_patterns:
+            parties_match = re.search(pattern, text[:5000], re.IGNORECASE | re.DOTALL)
+            if parties_match:
+                # Add all captured groups that aren't None
+                parties = [group.strip() for group in parties_match.groups() if group]
+                for party in parties:
+                    # Clean up the party name
+                    party = re.sub(r'\s+', ' ', party)
+                    party = re.sub(r'[\(\"\'].*?[\)\"\']', '', party)  # Remove parenthetical text
+                    party = party.strip('., \t\n\r')
+                    
+                    if party and len(party) > 3:  # Avoid very short strings
+                        result["organizations"].append({"name": party, "type": "organization"})
+                        result["parties"].append(party)
+                break
         
         # Extract dates
-        metadata.update(self._extract_all_dates(text))
+        date_patterns = [
+            # ISO format: YYYY-MM-DD
+            r'\b(\d{4}-\d{2}-\d{2})\b',
+            # Common US format: MM/DD/YYYY
+            r'\b(\d{1,2}/\d{1,2}/\d{4})\b',
+            # Text format: Month DD, YYYY
+            r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?,\s+(\d{4})\b',
+            # Short month format: MMM DD, YYYY
+            r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?,\s+(\d{4})\b'
+        ]
         
-        # Extract parties
-        if HAS_SPACY:
-            metadata.update(self._extract_parties_with_spacy(text))
-        else:
-            metadata.update(self._extract_parties_simple(text))
+        for pattern in date_patterns:
+            date_matches = re.finditer(pattern, text, re.IGNORECASE)
+            for match in date_matches:
+                if pattern.startswith(r'\b(\d{4}-\d{2}-\d{2})'):
+                    # ISO format
+                    date_str = match.group(1)
+                elif pattern.startswith(r'\b(\d{1,2}/\d{1,2}/\d{4})'):
+                    # MM/DD/YYYY format - convert to ISO
+                    parts = match.group(1).split('/')
+                    date_str = f"{parts[2]}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+                else:
+                    # Month name format - convert to ISO
+                    month_name = match.group(1)
+                    day = match.group(2)
+                    year = match.group(3)
+                    
+                    month_dict = {
+                        'january': '01', 'february': '02', 'march': '03', 'april': '04', 
+                        'may': '05', 'june': '06', 'july': '07', 'august': '08', 
+                        'september': '09', 'october': '10', 'november': '11', 'december': '12',
+                        'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04', 
+                        'jun': '06', 'jul': '07', 'aug': '08', 'sep': '09', 
+                        'oct': '10', 'nov': '11', 'dec': '12'
+                    }
+                    
+                    month = month_dict.get(month_name.lower(), '01')
+                    date_str = f"{year}-{month}-{day.zfill(2)}"
+                
+                if date_str not in result["dates"]:
+                    result["dates"].append(date_str)
+                
+                # Check for effective date patterns
+                effective_date_context = text[max(0, match.start() - 50):match.end() + 50]
+                if re.search(r'effective\s+date|commencement\s+date|starts?\s+on|begins?\s+on', effective_date_context, re.IGNORECASE):
+                    result["effective_date"] = date_str
+                
+                # Check for execution date patterns
+                execution_date_context = text[max(0, match.start() - 50):match.end() + 50]
+                if re.search(r'executed\s+on|signed\s+on|dated\s+as\s+of|as\s+of\s+the\s+date', execution_date_context, re.IGNORECASE):
+                    result["execution_date"] = date_str
+                
+                # Check for termination date patterns
+                termination_date_context = text[max(0, match.start() - 50):match.end() + 50]
+                if re.search(r'terminat(es|ion)\s+on|expir(es|y|ation)\s+on|end(s|ing)\s+on|until', termination_date_context, re.IGNORECASE):
+                    result["termination_date"] = date_str
         
         # Extract monetary values
-        metadata["monetary_values"] = self._extract_monetary_values(text)
+        money_patterns = [
+            r'\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+            r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+(?:dollars|USD|€|EUR|£|GBP)',
+            r'(?:USD|EUR|GBP)\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)'
+        ]
         
-        # Extract legal jurisdiction and governing law
-        metadata.update(self._extract_legal_framework(text))
+        for pattern in money_patterns:
+            money_matches = re.finditer(pattern, text)
+            for match in money_matches:
+                value = match.group(1)
+                if value not in result["monetary_values"]:
+                    result["monetary_values"].append(value)
         
-        # Extract contract status, version and related metadata
-        metadata.update(self._extract_contract_status(text))
+        # Extract jurisdiction and governing law
+        law_patterns = [
+            r'(?:governed by|subject to|pursuant to|in accordance with)[^\.\n]+((?:the laws of |the law of )?[A-Za-z\s]+(?:law|laws|jurisdiction))',
+            r'jurisdiction[^\.\n]+(?:courts|tribunals)[^\.\n]+(?:of|in)\s+([A-Za-z\s]+)'
+        ]
         
-        # Extract key legal clauses
-        metadata.update(self._extract_legal_clauses(text))
+        for pattern in law_patterns:
+            law_match = re.search(pattern, text, re.IGNORECASE)
+            if law_match:
+                law_text = law_match.group(1).strip()
+                
+                # Check if it specifies a jurisdiction or governing law
+                if re.search(r'jurisdiction|venue|forum|courts of', law_match.group(0), re.IGNORECASE):
+                    result["jurisdiction"] = law_text
+                else:
+                    result["governing_law"] = law_text
         
-        # Extract business terms
-        metadata.update(self._extract_business_terms(text))
+        # Extract contract status
+        status_patterns = {
+            "draft": r'\b(?:draft|proposal|for\s+review)\b',
+            "executed": r'\b(?:executed|signed|finalized)\b',
+            "expired": r'\b(?:expired|terminated|ended)\b',
+            "active": r'\b(?:active|in\s+effect|in\s+force)\b'
+        }
         
-        # Extract filename and version information if present
-        metadata.update(self._extract_source_document(text))
+        for status, pattern in status_patterns.items():
+            if re.search(pattern, text[:5000], re.IGNORECASE):
+                result["contract_status"] = status.title()
+                break
         
-        # Add estimated page count
-        metadata["estimated_page_count"] = self._estimate_page_count(text)
+        # Extract exclusivity information
+        exclusivity_match = re.search(r'(?:exclusiv(?:e|ity)|sole[ly]?)[^\.\n]+(?:right|distributor|provider|supplier)', text, re.IGNORECASE)
+        if exclusivity_match:
+            result["exclusivity"] = "Yes - " + exclusivity_match.group(0).strip()
         
-        # Check for version info if filename provided
+        # Extract non-compete information
+        non_compete_match = re.search(r'(?:non-compete|not\s+to\s+compete|shall\s+not\s+compete|refrain\s+from\s+competing)[^\.\n]+', text, re.IGNORECASE)
+        if non_compete_match:
+            result["non_compete"] = "Yes - " + non_compete_match.group(0).strip()
+        
+        # Extract dispute resolution
+        dispute_patterns = [
+            r'(?:dispute|controversy|claim)[^\.\n]+(?:shall|will|must)[^\.\n]+(?:arbitrat|mediat|courts\s+of)',
+            r'(?:arbitration|mediation)[^\.\n]+(?:clause|provision|section)',
+            r'(?:venue|forum|jurisdiction)[^\.\n]+(?:shall|will|must)[^\.\n]+(?:be|reside|exist)[^\.\n]+'
+        ]
+        
+        for pattern in dispute_patterns:
+            dispute_match = re.search(pattern, text, re.IGNORECASE)
+            if dispute_match:
+                result["dispute_resolution"] = dispute_match.group(0).strip()
+                break
+        
+        # Add version information if filename contains version indicators
         if filename:
-            metadata.update(self._extract_document_version(text, filename))
+            version_match = re.search(r'v(\d+(?:\.\d+)?)|version\s+(\d+(?:\.\d+)?)', filename, re.IGNORECASE)
+            if version_match:
+                version = version_match.group(1) or version_match.group(2)
+                result["version"] = f"V{version}"
         
-        # Clean metadata by removing empty values
-        metadata = {k: v for k, v in metadata.items() if v}
+        # Limit the number of entries for certain fields
+        result["organizations"] = result["organizations"][:5]
+        result["dates"] = result["dates"][:5]
+        result["monetary_values"] = result["monetary_values"][:5]
         
-        return metadata
+        return result
     
-    def _extract_document_type(self, text: str) -> Dict[str, str]:
+    def _extract_source_document_info(self, filename: str, text: str = None) -> Dict[str, Any]:
+        """Extract source document information from filename and text."""
+        info = {
+            "filename": filename,
+            "parsed_date": None,
+            "is_latest_version": True  # Default to True unless comparing multiple files
+        }
+        
+        # Try to extract date from filename using various patterns
+        date_patterns = [
+            # YYYY-MM-DD or YYYY_MM_DD
+            r'(\d{4})[-_](\d{1,2})[-_](\d{1,2})',
+            # DD-MM-YYYY or DD_MM_YYYY
+            r'(\d{1,2})[-_](\d{1,2})[-_](\d{4})',
+            # Simple year extraction
+            r'[\D](\d{4})[\D]'
+        ]
+        
+        for pattern in date_patterns:
+            match = re.search(pattern, filename)
+            if match:
+                if pattern.startswith(r'(\d{4})'):
+                    # YYYY-MM-DD format
+                    year = match.group(1)
+                    month = match.group(2).zfill(2)
+                    day = match.group(3).zfill(2)
+                    info["parsed_date"] = f"{year}-{month}-{day}"
+                    break
+                elif pattern.startswith(r'(\d{1,2})[-_](\d{1,2})'):
+                    # DD-MM-YYYY format
+                    day = match.group(1).zfill(2)
+                    month = match.group(2).zfill(2)
+                    year = match.group(3)
+                    info["parsed_date"] = f"{year}-{month}-{day}"
+                    break
+                elif pattern.startswith(r'[\D](\d{4})'):
+                    # Just year
+                    year = match.group(1)
+                    info["parsed_date"] = f"{year}-01-01"  # Default to January 1st
+                    break
+        
+        # Try to determine if this is a draft
+        if re.search(r'draft|proposal', filename, re.IGNORECASE) or (text and re.search(r'DRAFT', text[:1000], re.IGNORECASE)):
+            info["status"] = "Draft"
+        else:
+            info["status"] = "Final"
+        
+        return info
+    
+    def _estimate_page_count(self, text: str) -> int:
         """
-        Extract document type and title.
+        Estimate the number of pages based on text length.
         
         Args:
             text: Document text
             
         Returns:
-            Dictionary with document type and title
+            Estimated page count
         """
-        # Extract first 1000 characters for examination
-        header_text = text[:1000].lower()
-        
-        # Default values
-        doc_type = "Unknown"
-        title = "Untitled Document"
-        
-        # Check for document type keywords
-        for type_keyword in self.document_types:
-            if type_keyword in header_text:
-                doc_type = type_keyword.title()
-                
-                # Try to extract the full title using regex
-                title_pattern = re.compile(
-                    rf"(?:this)?\s*{type_keyword}\s+(?:between|among|of|for|with|by)?\s*(.*?)(?:dated|made|entered|this\s+\d|\n\n)",
-                    re.IGNORECASE | re.DOTALL
-                )
-                title_match = title_pattern.search(text[:2000])
-                
-                if title_match:
-                    title = f"{doc_type} {title_match.group(1).strip()}"
-                    title = re.sub(r'\s+', ' ', title)
-                else:
-                    # Fallback: Use the first non-empty line as title
-                    first_lines = [line.strip() for line in text.split("\n") if line.strip()]
-                    if first_lines:
-                        title = first_lines[0]
-                
-                break
-        
-        return {"document_type": doc_type, "title": title}
+        # Rough estimate: ~3000 characters per page
+        return max(1, len(text) // 3000)
     
     def _extract_dates(self, text: str) -> List[str]:
         """
@@ -379,7 +553,7 @@ JSON Metadata:
         # Look for organization patterns
         org_patterns = [
             r'\b[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*\s+(?:Inc\.|LLC|Ltd\.|Corp\.|Corporation|Company)\b',
-            r'\b(?:the\s+)?([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*)\s+\((?:the\s+)?"(?:Company|Seller|Buyer|Vendor|Client|Contractor|Consultant|Employer|Employee)"\)',
+            r'([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*)*)\s+\((?:the\s+)?"(?:Company|Seller|Buyer|Vendor|Client|Contractor|Consultant|Employer|Employee)"\)',
             r'(?:between|among)\s+([^,]+),\s+(?:a|an)\s+([^,]+)'
         ]
         
@@ -434,19 +608,6 @@ JSON Metadata:
         
         # Filter out duplicates
         return list(set(monetary_values))[:10]  # Limit to top 10
-    
-    def _estimate_page_count(self, text: str) -> int:
-        """
-        Estimate the number of pages based on text length.
-        
-        Args:
-            text: Document text
-            
-        Returns:
-            Estimated page count
-        """
-        # Rough estimate: ~3000 characters per page
-        return max(1, len(text) // 3000)
     
     def _extract_all_dates(self, text: str) -> Dict[str, Any]:
         """

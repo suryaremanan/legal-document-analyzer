@@ -12,31 +12,29 @@ from typing import Tuple, Optional
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def save_uploaded_file(uploaded_file) -> Tuple[str, str]:
+def save_uploaded_file(uploaded_file):
     """
-    Save an uploaded file to a temporary location.
+    Save an uploaded file to a temporary directory.
     
     Args:
         uploaded_file: Streamlit UploadedFile object
         
     Returns:
-        Tuple of (file path, file name)
+        Path to the saved file
     """
-    try:
-        # Create a temporary file path
-        temp_dir = tempfile.mkdtemp()
-        path = os.path.join(temp_dir, uploaded_file.name)
-        
-        # Save the file
-        with open(path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-            
-        logger.info(f"Saved uploaded file {uploaded_file.name} to {path}")
-        
-        return path, uploaded_file.name
-    except Exception as e:
-        logger.error(f"Error saving uploaded file: {str(e)}")
-        return "", ""
+    # Create temp directory if it doesn't exist
+    temp_dir = tempfile.mkdtemp()
+    
+    # Construct a path for the uploaded file
+    file_path = os.path.join(temp_dir, uploaded_file.name)
+    
+    # Write the file to the temp location
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    
+    logging.info(f"Saved uploaded file {uploaded_file.name} to {file_path}")
+    
+    return file_path
 
 def get_temp_file_path(file_name: str) -> str:
     """

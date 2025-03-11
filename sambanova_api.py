@@ -1,39 +1,78 @@
-import os
+"""
+Module for interacting with the SambaNova API for LLaMA model access.
+"""
+
 import requests
 import json
+import os
 import logging
+import time
+import random
 from typing import Dict, Any, Optional
-
-try:
-    import dotenv
-    dotenv.load_dotenv()
-    print("Environment variables loaded from .env file")
-except ImportError:
-    print("python-dotenv not installed, using environment variables directly")
+from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# SambaNova API endpoint and credentials
-SAMBANOVA_API_URL = "https://api.sambanova.ai/v1/completions"
-# If environment variable is not set, use the hardcoded key
-# SAMBANOVA_API_KEY = os.environ.get("SAMBANOVA_API_KEY", "")
-SAMBANOVA_API_KEY = "59e66a78-70e4-4846-9d76-a3f64513bd39"  # Hardcoded for testing
+# Load environment variables from .env file if it exists
+try:
+    load_dotenv()
+    logger.info("Environment variables loaded from .env file")
+except Exception as e:
+    logger.warning(f"Could not load .env file: {str(e)}")
+
+# API configuration with the correct chat completions endpoint
+SAMBANOVA_API_ENDPOINT = "https://api.sambanova.ai/v1/chat/completions"
+SAMBANOVA_MODEL = "Meta-Llama-3.1-8B-Instruct"
+
+# Use the provided API key
+SAMBANOVA_API_KEY = "b3e34827-3d99-4a42-9972-46f3e8aef637"
+
+# Rate limiting parameters
+MAX_REQUESTS_PER_MINUTE = 10  # Maximum allowed requests per minute
+REQUEST_WINDOW_SIZE = 60  # Window size in seconds
+_request_timestamps = []  # List to track request timestamps
 
 # Print API key status (but not the actual key)
 if SAMBANOVA_API_KEY:
+    logger.info("✅ SambaNova API key is set")
     print("✅ SambaNova API key is set")
 else:
-    print("❌ SambaNova API key is not set")
+    logger.warning("⚠️ SambaNova API key is not set")
+    print("⚠️ SambaNova API key is not set")
+
+def _throttle_requests():
+    """
+    Implement client-side rate limiting by checking recent request count
+    and delaying if necessary.
+    """
+    global _request_timestamps
+    current_time = time.time()
+    
+    # Clean up old timestamps
+    _request_timestamps = [ts for ts in _request_timestamps if current_time - ts < REQUEST_WINDOW_SIZE]
+    
+    # Check if we're at the rate limit
+    if len(_request_timestamps) >= MAX_REQUESTS_PER_MINUTE:
+        # Calculate required wait time
+        oldest_timestamp = min(_request_timestamps)
+        wait_time = REQUEST_WINDOW_SIZE - (current_time - oldest_timestamp) + 1
+        
+        if wait_time > 0:
+            logger.info(f"Rate limit approaching. Waiting {wait_time:.2f} seconds before next request.")
+            time.sleep(wait_time)
+    
+    # Add current timestamp to the list
+    _request_timestamps.append(time.time())
 
 def get_llama_response(prompt: str, 
                       temperature: float = 0.0, 
                       max_tokens: int = 800,
                       top_p: float = 0.95,
-                      stop_sequences: Optional[list] = None) -> str:
+                      stop_sequences: Optional[list] = None) -> Optional[str]:
     """
-    Get a response from SambaNova's Llama 3.1 model.
+    Get a response from SambaNova's Llama 3.1 model using the chat completions API.
     
     Args:
         prompt: The prompt text to send to the model
@@ -43,95 +82,169 @@ def get_llama_response(prompt: str,
         stop_sequences: Optional list of sequences to stop generation
         
     Returns:
-        Generated text response
+        Generated text response or None on failure
     """
     if not SAMBANOVA_API_KEY:
-        logger.warning("SAMBANOVA_API_KEY not set! Using mock response.")
-        return _get_mock_response(prompt)
+        logger.error("SambaNova API key not set.")
+        return None
     
+    # Check prompt length and truncate if needed
+    # Llama 3.1 has a 16k token limit, conservatively estimate 4 chars per token
+    max_prompt_chars = 15000 * 4  # Leave room for response
+    
+    if len(prompt) > max_prompt_chars:
+        logger.warning(f"Prompt too long ({len(prompt)} chars). Truncating to {max_prompt_chars} chars...")
+        
+        # Find a good breaking point (paragraph)
+        breakpoint = prompt.rfind("\n\n", 0, max_prompt_chars)
+        if breakpoint == -1:
+            # If no good paragraph break, find a sentence break
+            breakpoint = prompt.rfind(". ", 0, max_prompt_chars)
+        
+        if breakpoint == -1:
+            # If no good sentence break, just cut at the limit
+            prompt = prompt[:max_prompt_chars]
+        else:
+            prompt = prompt[:breakpoint]
+            
+        # Add note about truncation
+        prompt += "\n\n[Note: Context was truncated due to length limits]"
+    
+    # Log information about the request
+    logger.info(f"Sending request to SambaNova chat API with prompt length: {len(prompt)}")
+    
+    # Apply client-side rate limiting
+    _throttle_requests()
+    
+    # Set headers according to SambaNova documentation
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {SAMBANOVA_API_KEY}"
     }
     
-    # Prepare the payload
+    # Prepare the payload for chat completions API
     payload = {
-        "model": "Meta-Llama-3.1-8B-Instruct",
-        "prompt": prompt,
+        "model": SAMBANOVA_MODEL,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "top_p": top_p,
+        "top_p": top_p
     }
     
     if stop_sequences:
-        payload["stop_sequences"] = stop_sequences
-        
+        payload["stop"] = stop_sequences
+    
+    # Implement retry logic for resilience with exponential backoff
+    max_retries = 5
+    base_delay = 1.0  # Initial delay in seconds
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                SAMBANOVA_API_ENDPOINT,
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+            
+            # Log the response details for debugging
+            logger.info(f"API Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                # Successfully got a response
+                try:
+                    data = response.json()
+                    logger.info(f"API Response structure: {list(data.keys())}")
+                    
+                    # Parse response format for chat completions API
+                    if "choices" in data and len(data["choices"]) > 0:
+                        if "message" in data["choices"][0]:
+                            content = data["choices"][0]["message"].get("content", "")
+                            logger.info(f"Successfully extracted content: {content[:50]}...")
+                            return content
+                        else:
+                            logger.warning(f"No 'message' field in choices: {data['choices'][0]}")
+                            return str(data["choices"][0])
+                    else:
+                        logger.warning(f"Unexpected API response format: {data}")
+                        return None
+                except Exception as e:
+                    logger.error(f"Error parsing API response: {str(e)}")
+                    return None
+            elif response.status_code == 429:
+                # Rate limit exceeded - implement exponential backoff
+                retry_after = response.headers.get('Retry-After')
+                
+                if retry_after and retry_after.isdigit():
+                    # If server specifies retry time, use that
+                    wait_time = int(retry_after)
+                else:
+                    # Otherwise use exponential backoff with jitter
+                    wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                
+                logger.warning(f"Rate limit exceeded. Retrying in {wait_time:.2f} seconds... (Attempt {attempt+1}/{max_retries})")
+                time.sleep(wait_time)
+                continue
+            else:
+                logger.error(f"API error: {response.status_code} - {response.text}")
+                
+                # Retry on 5xx errors
+                if (500 <= response.status_code < 600) and attempt < max_retries - 1:
+                    # Calculate delay with exponential backoff and jitter
+                    wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    logger.info(f"Retrying in {wait_time:.2f} seconds... (Attempt {attempt+1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                
+                return None
+                
+        except Exception as e:
+            logger.error(f"Request exception: {str(e)}")
+            
+            if attempt < max_retries - 1:
+                # Calculate delay with exponential backoff and jitter
+                wait_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                logger.info(f"Retrying in {wait_time:.2f} seconds... (Attempt {attempt+1}/{max_retries})")
+                time.sleep(wait_time)
+                continue
+            
+            return None
+    
+    logger.error("All API attempts failed")
+    return None
+
+def get_models() -> Dict[str, Any]:
+    """
+    Get a list of available models from the SambaNova API.
+    
+    Returns:
+        Dictionary containing model information or error
+    """
+    if not SAMBANOVA_API_KEY:
+        logger.error("SambaNova API key not set.")
+        return {"error": "API key not configured", "models": [SAMBANOVA_MODEL]}
+    
     try:
-        logger.info("Sending request to SambaNova API")
-        logger.info(f"URL: {SAMBANOVA_API_URL}")
-        logger.info(f"Headers: {headers}")
-        logger.info(f"Payload: {json.dumps(payload)}")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {SAMBANOVA_API_KEY}"
+        }
         
-        response = requests.post(SAMBANOVA_API_URL, headers=headers, json=payload)
+        # Use the models endpoint matching our completions endpoint
+        response = requests.get(
+            "https://api.sambanova.ai/v1/models",
+            headers=headers,
+            timeout=10
+        )
         
         if response.status_code == 200:
-            # Print the raw response for debugging
-            logger.info(f"Raw response: {response.text}")
-            
-            # Try to parse the response JSON
-            try:
-                data = response.json()
-                logger.info(f"Response JSON structure: {json.dumps(data)}")
-                
-                # Check different possible response formats
-                if "response" in data:
-                    return data["response"]
-                elif "choices" in data and len(data["choices"]) > 0:
-                    return data["choices"][0].get("text", "")
-                elif "generations" in data and len(data["generations"]) > 0:
-                    return data["generations"][0].get("text", "")
-                elif "completion" in data:
-                    return data["completion"]
-                elif "output" in data:
-                    return data["output"]
-                else:
-                    # Return the entire response as a string if we can't find a specific field
-                    logger.warning("Could not find expected response field, returning full response")
-                    return str(data)
-            except Exception as e:
-                logger.error(f"Error parsing response JSON: {str(e)}")
-                return f"Error processing API response: {response.text}"
+            return response.json()
         else:
-            logger.error(f"API error: {response.status_code} - {response.text}")
-            return f"Error: Failed to get response from API (Status code: {response.status_code})"
-            
+            logger.error(f"SambaNova API error: {response.status_code} - {response.text}")
+            return {"error": f"API returned status code {response.status_code}", "models": [SAMBANOVA_MODEL]}
+    
     except Exception as e:
-        logger.error(f"Exception when calling SambaNova API: {str(e)}")
-        return _get_mock_response(prompt)
-
-def _get_mock_response(prompt: str) -> str:
-    """
-    Generate a mock response when the API is not available.
-    
-    Args:
-        prompt: The prompt text
-        
-    Returns:
-        Mock response
-    """
-    logger.info("Generating mock response")
-    
-    # Extract question from prompt
-    question_start = prompt.find("USER QUESTION:")
-    if question_start != -1:
-        question = prompt[question_start:].split("\n")[1].strip()
-    else:
-        question = "your question"
-    
-    return f"""Based on the document provided, I found some information related to {question}. 
-    
-The document appears to contain contractual information, possibly related to a business agreement or legal document. However, without specific details from the document context, I can only provide a general response.
-
-If you need specific information from the document, please ensure the document has been properly processed and that your question is specific to the content within it.
-
-(Note: This is a simulated response as the SambaNova API is not configured. Please set the SAMBANOVA_API_KEY environment variable to enable actual API calls.)""" 
+        logger.error(f"Error getting models from SambaNova API: {str(e)}")
+        return {"error": str(e), "models": [SAMBANOVA_MODEL]} 

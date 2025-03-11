@@ -7,40 +7,41 @@ import re
 import os
 import fitz  # PyMuPDF
 from typing import List, Optional, Tuple
+from utils import save_uploaded_file
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def extract_text_from_pdf(file_path: str) -> str:
+def extract_text_from_pdf(uploaded_file):
     """
-    Extract text from a PDF file.
+    Extract text content from a PDF file.
     
     Args:
-        file_path: Path to the PDF file
+        uploaded_file: Streamlit uploaded file object
         
     Returns:
-        Extracted text as a string
+        Extracted text as string
     """
     try:
-        logger.info(f"Extracting text from PDF: {file_path}")
+        # Save the uploaded file to a temporary location
+        temp_path = save_uploaded_file(uploaded_file)
         
-        # Open the PDF file
-        doc = fitz.open(file_path)
+        # Extract text using PyMuPDF (fitz)
+        logging.info(f"Extracting text from PDF: {uploaded_file}")
+        doc = fitz.open(temp_path)  # Use temp_path instead of just the filename
         
-        # Extract text from each page
-        full_text = ""
-        for page_num in range(len(doc)):
-            page = doc.load_page(page_num)
-            page_text = page.get_text()
-            full_text += page_text + "\n\n"  # Add extra newlines between pages
+        text = ""
+        for page in doc:
+            text += page.get_text()
         
-        logger.info(f"Successfully extracted {len(full_text)} characters from {len(doc)} pages")
+        # Clean up the text
+        text = clean_text(text)
         
-        return full_text
+        return text
     except Exception as e:
-        logger.error(f"Error extracting text from PDF: {str(e)}")
-        return f"Error extracting text: {str(e)}"
+        logging.error(f"Error extracting text from PDF: {str(e)}")
+        return ""
 
 def clean_text(text: str) -> str:
     """

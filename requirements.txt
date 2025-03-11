@@ -1,29 +1,34 @@
 # Core packages
-streamlit==1.30.0
-PyMuPDF==1.23.9
+streamlit>=1.30.0
+PyMuPDF>=1.22.0
 PyPDF2==3.0.1
-requests==2.31.0
-python-dotenv==1.0.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+numpy>=1.24.0
 
 # Machine learning and NLP
-spacy==3.5.3
+spacy>=3.6.0
 thinc==8.1.10
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.5.0/en_core_web_sm-3.5.0-py3-none-any.whl
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0-py3-none-any.whl
+scikit-learn>=1.2.0
+transformers>=4.30.0
+torch>=2.0.0
+python-docx>=0.8.11
+matplotlib>=3.7.0
+plotly>=5.14.0
+scipy>=1.10.0
+regex>=2022.10.31
 
 # Fix the specific version for sentence-transformers
-sentence-transformers==2.1.0
+sentence-transformers>=2.2.0
 
 # Vector database
-faiss-cpu==1.7.4
+faiss-cpu>=1.7.0
 
 # Build dependencies
 setuptools==68.0.0
 wheel==0.38.4
 
-# Torch with specific versions for compatibility
-torch==1.13.1
-torchvision==0.14.1
-transformers==4.26.0
-
 # Add compatible huggingface_hub version
-huggingface_hub==0.12.1
+huggingface_hub>=0.16.4
