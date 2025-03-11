@@ -27,7 +27,7 @@ SAMBANOVA_API_ENDPOINT = "https://api.sambanova.ai/v1/chat/completions"
 SAMBANOVA_MODEL = "Meta-Llama-3.1-8B-Instruct"
 
 # Use the provided API key
-SAMBANOVA_API_KEY = "b3e34827-3d99-4a42-9972-46f3e8aef637"
+SAMBANOVA_API_KEY = "9c0f7791-a5ee-4b3f-adfb-e83a086d8e6e"
 
 # Rate limiting parameters
 MAX_REQUESTS_PER_MINUTE = 10  # Maximum allowed requests per minute
